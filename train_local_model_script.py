@@ -19,6 +19,9 @@ from architecture.resnet50_fpn import Net
 # Decide if rebalancing based on the target class will be used to train
 rebalance = True
 
+# Decide if loading the xval indices else randomly selecting the train, val and test indices
+load_indices = True
+
 print("Loading Lombardia model...")
 # Loading state dictionary
 STATE_DICT_PATH = "lombardia_model/weights/checkpoint.pth"
@@ -41,6 +44,17 @@ for name, param in model.named_parameters():
     if param.requires_grad:
         print(name)
 
+# Output location
+
+if (rebalance):
+    print("We will train rebalancing the dataset...")
+    output_dir = "litoral_model/rebalance"
+else:
+    print("We will train without rebalancing the dataset...")
+    output_dir = "litoral_model/no_rebalance"
+
+os.makedirs(output_dir, exist_ok=True)
+
 print("Loading Data...")
 
 # Loading labels
@@ -48,8 +62,25 @@ db_parana = pd.read_csv("labels/parana_labels.csv")
 db_rosario = pd.read_csv("labels/rosario_labels.csv")
 db_santafe = pd.read_csv("labels/santafe_labels.csv")
 
+train_val_transform = transforms.Compose([
+            transforms.Resize(800), # Images are resized to 800x800 using the same resolution as inTorres et al. (2023)
+            transforms.RandomHorizontalFlip(),  # Random horizontal flips as in Torres et al. (2023)
+            transforms.RandomRotation(90), # Random 90-degree rotations as in Torres et al. (2023)
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225])  # ImageNet normalization
+            ])
+
+test_transform = transforms.Compose([
+            transforms.Resize(800), # Images are resized to 800x800 using the same resolution as inTorres et al. (2023)
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225])  # ImageNet normalization
+            ])
+
+
 class CustomImageDataset(Dataset):
-    def __init__(self, dataframe, img_dir):
+    def __init__(self, dataframe, img_dir, transform):
         """
         Args:
             dataframe (pandas.DataFrame): DataFrame containing image file names and labels.
@@ -57,15 +88,7 @@ class CustomImageDataset(Dataset):
         """
         self.img_labels = dataframe[['file_name', 'etiqueta']]
         self.img_dir = img_dir
-        # Transforms for ResNet50
-        self.transform = transforms.Compose([
-            transforms.Resize(800), # Images are resized to 800x800 using the same resolution as inTorres et al. (2023)
-            transforms.RandomHorizontalFlip(),  # Random horizontal flips as in Torres et al. (2023)
-            transforms.RandomRotation(90), # Random 90-degree rotations as in Torres et al. (2023)
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                 std=[0.229, 0.224, 0.225])  # ImageNet normalization
-        ])
+        self.transform = transform
 
     def __len__(self):
         return len(self.img_labels)
@@ -80,90 +103,148 @@ class CustomImageDataset(Dataset):
 
         return image, label
 
+# If load_indices is True, load the indices from the CSV files
+if load_indices:
+    
+    print("Loading indices from CSV files...")
 
-parana_dataset = CustomImageDataset(db_parana, 'images/parana/patches_parana')
-rosario_dataset = CustomImageDataset(db_rosario, 'images/rosario/patches_ros')
-santafe_dataset = CustomImageDataset(db_santafe, 'images/santa_fe/patches_sfe')
+    location_indices = "litoral_model/no_rebalance"
+    
+    db_parana = pd.read_csv("labels/parana_labels.csv")
+    db_rosario = pd.read_csv("labels/rosario_labels.csv")
+    db_santafe = pd.read_csv("labels/santafe_labels.csv")
 
-# Separating each dataset into train val test
+    list_test_images = pd.read_csv(location_indices + "/test_images.csv")
+    list_val_images = pd.read_csv(location_indices + "/val_images.csv")
+    list_train_images = pd.read_csv(location_indices + "/train_images.csv")
 
-# Split ratios
-train_ratio = 0.6
-val_ratio = 0.20
-test_ratio = 0.20
+    # Loading the images used for train, val and test    
+    db_parana_train = db_parana[db_parana['file_name'].isin(list_train_images['file_name'])]
+    db_parana_val = db_parana[db_parana['file_name'].isin(list_val_images['file_name'])]
+    db_parana_test = db_parana[db_parana['file_name'].isin(list_test_images['file_name'])]
 
-# Split parana_dataset
-parana_train_size = int(train_ratio * len(parana_dataset))
-parana_val_size = int(val_ratio * len(parana_dataset))
-parana_test_size = len(parana_dataset) - parana_train_size - parana_val_size
-parana_train_dataset, parana_val_dataset, parana_test_dataset = random_split(
-    parana_dataset, [parana_train_size, parana_val_size, parana_test_size]
-)
+    db_rosario_train = db_rosario[db_rosario['file_name'].isin(list_train_images['file_name'])]
+    db_rosario_val = db_rosario[db_rosario['file_name'].isin(list_val_images['file_name'])]
+    db_rosario_test = db_rosario[db_rosario['file_name'].isin(list_test_images['file_name'])]
 
-# Split rosario_dataset
-rosario_train_size = int(train_ratio * len(rosario_dataset))
-rosario_val_size = int(val_ratio * len(rosario_dataset))
-rosario_test_size = len(rosario_dataset) - rosario_train_size - rosario_val_size
-rosario_train_dataset, rosario_val_dataset, rosario_test_dataset = random_split(
-    rosario_dataset, [rosario_train_size, rosario_val_size, rosario_test_size]
-)
+    db_santafe_train = db_santafe[db_santafe['file_name'].isin(list_train_images['file_name'])]
+    db_santafe_val = db_santafe[db_santafe['file_name'].isin(list_val_images['file_name'])]
+    db_santafe_test = db_santafe[db_santafe['file_name'].isin(list_test_images['file_name'])]
 
-# Split santafe_dataset
-santafe_train_size = int(train_ratio * len(santafe_dataset))
-santafe_val_size = int(val_ratio * len(santafe_dataset))
-santafe_test_size = len(santafe_dataset) - santafe_train_size - santafe_val_size
-santafe_train_dataset, santafe_val_dataset, santafe_test_dataset = random_split(
-    santafe_dataset, [santafe_train_size, santafe_val_size, santafe_test_size]
-)
+    parana_dataset = CustomImageDataset(db_parana, 'images/parana/patches_parana',test_transform)
+    rosario_dataset = CustomImageDataset(db_rosario, 'images/rosario/patches_ros',test_transform)
+    santafe_dataset = CustomImageDataset(db_santafe, 'images/santa_fe/patches_sfe',test_transform)
 
-print(f"Paraná: Train - {len(parana_train_dataset)}, Val - {len(parana_val_dataset)}, Test - {len(parana_test_dataset)}")
-print(f"Rosario: Train - {len(rosario_train_dataset)}, Val - {len(rosario_val_dataset)}, Test - {len(rosario_test_dataset)}")
-print(f"Santa Fe: Train - {len(santafe_train_dataset)}, Val - {len(santafe_val_dataset)}, Test - {len(santafe_test_dataset)}")
+    parana_test_dataset = CustomImageDataset(db_parana_test, 'images/parana/patches_parana',test_transform)
+    parana_val_dataset = CustomImageDataset(db_parana_val, 'images/parana/patches_parana',train_val_transform)
+    parana_train_dataset = CustomImageDataset(db_parana_train, 'images/parana/patches_parana',train_val_transform)
 
-# Combine train datasets
-train_dataset = ConcatDataset([parana_train_dataset, rosario_train_dataset, santafe_train_dataset])
+    rosario_test_dataset = CustomImageDataset(db_rosario_test, 'images/rosario/patches_ros',test_transform)
+    rosario_val_dataset = CustomImageDataset(db_rosario_val, 'images/rosario/patches_ros',train_val_transform)
+    rosario_train_dataset = CustomImageDataset(db_rosario_train, 'images/rosario/patches_ros',train_val_transform)
 
-# Combine val datasets
-val_dataset = ConcatDataset([parana_val_dataset, rosario_val_dataset, santafe_val_dataset])
+    santafe_test_dataset = CustomImageDataset(db_santafe_test, 'images/santa_fe/patches_sfe',test_transform)
+    santafe_val_dataset = CustomImageDataset(db_santafe_val, 'images/santa_fe/patches_sfe',train_val_transform)
+    santafe_train_dataset = CustomImageDataset(db_santafe_train, 'images/santa_fe/patches_sfe',train_val_transform)
 
-# Combine test datasets
-test_dataset = ConcatDataset([parana_test_dataset, rosario_test_dataset, santafe_test_dataset])
+    # Saving images used for train, val and test in the output directory
 
-print(f"Combined Train Dataset Size: {len(train_dataset)}")
-print(f"Combined Val Dataset Size: {len(val_dataset)}")
-print(f"Combined Test Dataset Size: {len(test_dataset)}")
+    list_train_images.to_csv(os.path.join(output_dir, 'train_images.csv'), index=False)
+    list_val_images.to_csv(os.path.join(output_dir, 'val_images.csv'), index=False)
+    list_test_images.to_csv(os.path.join(output_dir, 'test_images.csv'), index=False)
 
-# Saving images used for train, val and test
+    print(f"Paraná: Train - {len(parana_train_dataset)}, Val - {len(parana_val_dataset)}, Test - {len(parana_test_dataset)}")
+    print(f"Rosario: Train - {len(rosario_train_dataset)}, Val - {len(rosario_val_dataset)}, Test - {len(rosario_test_dataset)}")
+    print(f"Santa Fe: Train - {len(santafe_train_dataset)}, Val - {len(santafe_val_dataset)}, Test - {len(santafe_test_dataset)}")
 
-# Output location
+    # Combine train datasets
+    train_dataset = ConcatDataset([parana_train_dataset, rosario_train_dataset, santafe_train_dataset])
 
-if (rebalance):
-    output_dir = "litoral_model/rebalance"
-else:   
-    output_dir = "litoral_model/no_rebalance"
+    # Combine val datasets
+    val_dataset = ConcatDataset([parana_val_dataset, rosario_val_dataset, santafe_val_dataset])
 
-os.makedirs(output_dir, exist_ok=True)
+    # Combine test datasets
+    test_dataset = ConcatDataset([parana_test_dataset, rosario_test_dataset, santafe_test_dataset])
 
-train_image_filenames = []
-train_image_filenames.extend(parana_dataset.img_labels.iloc[parana_train_dataset.indices]['file_name'].tolist())
-train_image_filenames.extend(rosario_dataset.img_labels.iloc[rosario_train_dataset.indices]['file_name'].tolist())
-train_image_filenames.extend(santafe_dataset.img_labels.iloc[santafe_train_dataset.indices]['file_name'].tolist())
-train_images_df = pd.DataFrame({'file_name': train_image_filenames})
-train_images_df.to_csv(os.path.join(output_dir, 'train_images.csv'), index=False)
+    print(f"Combined Train Dataset Size: {len(train_dataset)}")
+    print(f"Combined Val Dataset Size: {len(val_dataset)}")
+    print(f"Combined Test Dataset Size: {len(test_dataset)}")
 
-val_image_filenames = []
-val_image_filenames.extend(parana_dataset.img_labels.iloc[parana_val_dataset.indices]['file_name'].tolist())
-val_image_filenames.extend(rosario_dataset.img_labels.iloc[rosario_val_dataset.indices]['file_name'].tolist())
-val_image_filenames.extend(santafe_dataset.img_labels.iloc[santafe_val_dataset.indices]['file_name'].tolist())
-val_images_df = pd.DataFrame({'file_name': val_image_filenames})
-val_images_df.to_csv(os.path.join(output_dir, 'val_images.csv'), index=False)
+else:
+    parana_dataset = CustomImageDataset(db_parana, 'images/parana/patches_parana',test_transform)
+    rosario_dataset = CustomImageDataset(db_rosario, 'images/rosario/patches_ros',test_transform)
+    santafe_dataset = CustomImageDataset(db_santafe, 'images/santa_fe/patches_sfe',test_transform)
+    
+    # Separating each dataset into train val test
 
-test_image_filenames = []
-test_image_filenames.extend(parana_dataset.img_labels.iloc[parana_test_dataset.indices]['file_name'].tolist())
-test_image_filenames.extend(rosario_dataset.img_labels.iloc[rosario_test_dataset.indices]['file_name'].tolist())
-test_image_filenames.extend(santafe_dataset.img_labels.iloc[santafe_test_dataset.indices]['file_name'].tolist())
-test_images_df = pd.DataFrame({'file_name': test_image_filenames})
-test_images_df.to_csv(os.path.join(output_dir, 'test_images.csv'), index=False)
+    # Split ratios
+    train_ratio = 0.6
+    val_ratio = 0.20
+    test_ratio = 0.20
+
+    # Split parana_dataset
+    parana_train_size = int(train_ratio * len(parana_dataset))
+    parana_val_size = int(val_ratio * len(parana_dataset))
+    parana_test_size = len(parana_dataset) - parana_train_size - parana_val_size
+    parana_train_dataset, parana_val_dataset, parana_test_dataset = random_split(
+        parana_dataset, [parana_train_size, parana_val_size, parana_test_size]
+    )
+
+    # Split rosario_dataset
+    rosario_train_size = int(train_ratio * len(rosario_dataset))
+    rosario_val_size = int(val_ratio * len(rosario_dataset))
+    rosario_test_size = len(rosario_dataset) - rosario_train_size - rosario_val_size
+    rosario_train_dataset, rosario_val_dataset, rosario_test_dataset = random_split(
+        rosario_dataset, [rosario_train_size, rosario_val_size, rosario_test_size]
+    )
+
+    # Split santafe_dataset
+    santafe_train_size = int(train_ratio * len(santafe_dataset))
+    santafe_val_size = int(val_ratio * len(santafe_dataset))
+    santafe_test_size = len(santafe_dataset) - santafe_train_size - santafe_val_size
+    santafe_train_dataset, santafe_val_dataset, santafe_test_dataset = random_split(
+        santafe_dataset, [santafe_train_size, santafe_val_size, santafe_test_size]
+    )
+
+    print(f"Paraná: Train - {len(parana_train_dataset)}, Val - {len(parana_val_dataset)}, Test - {len(parana_test_dataset)}")
+    print(f"Rosario: Train - {len(rosario_train_dataset)}, Val - {len(rosario_val_dataset)}, Test - {len(rosario_test_dataset)}")
+    print(f"Santa Fe: Train - {len(santafe_train_dataset)}, Val - {len(santafe_val_dataset)}, Test - {len(santafe_test_dataset)}")
+
+    # Combine train datasets
+    train_dataset = ConcatDataset([parana_train_dataset, rosario_train_dataset, santafe_train_dataset])
+
+    # Combine val datasets
+    val_dataset = ConcatDataset([parana_val_dataset, rosario_val_dataset, santafe_val_dataset])
+
+    # Combine test datasets
+    test_dataset = ConcatDataset([parana_test_dataset, rosario_test_dataset, santafe_test_dataset])
+
+    print(f"Combined Train Dataset Size: {len(train_dataset)}")
+    print(f"Combined Val Dataset Size: {len(val_dataset)}")
+    print(f"Combined Test Dataset Size: {len(test_dataset)}")
+
+    # Saving images used for train, val and test
+
+    train_image_filenames = []
+    train_image_filenames.extend(parana_dataset.img_labels.iloc[parana_train_dataset.indices]['file_name'].tolist())
+    train_image_filenames.extend(rosario_dataset.img_labels.iloc[rosario_train_dataset.indices]['file_name'].tolist())
+    train_image_filenames.extend(santafe_dataset.img_labels.iloc[santafe_train_dataset.indices]['file_name'].tolist())
+    train_images_df = pd.DataFrame({'file_name': train_image_filenames})
+    train_images_df.to_csv(os.path.join(output_dir, 'train_images.csv'), index=False)
+
+    val_image_filenames = []
+    val_image_filenames.extend(parana_dataset.img_labels.iloc[parana_val_dataset.indices]['file_name'].tolist())
+    val_image_filenames.extend(rosario_dataset.img_labels.iloc[rosario_val_dataset.indices]['file_name'].tolist())
+    val_image_filenames.extend(santafe_dataset.img_labels.iloc[santafe_val_dataset.indices]['file_name'].tolist())
+    val_images_df = pd.DataFrame({'file_name': val_image_filenames})
+    val_images_df.to_csv(os.path.join(output_dir, 'val_images.csv'), index=False)
+
+    test_image_filenames = []
+    test_image_filenames.extend(parana_dataset.img_labels.iloc[parana_test_dataset.indices]['file_name'].tolist())
+    test_image_filenames.extend(rosario_dataset.img_labels.iloc[rosario_test_dataset.indices]['file_name'].tolist())
+    test_image_filenames.extend(santafe_dataset.img_labels.iloc[santafe_test_dataset.indices]['file_name'].tolist())
+    test_images_df = pd.DataFrame({'file_name': test_image_filenames})
+    test_images_df.to_csv(os.path.join(output_dir, 'test_images.csv'), index=False)
 
 # Training the model
 
@@ -175,18 +256,34 @@ batch_size = 16
 
 if (rebalance):
     # Calculating sample weights
-    class_counts = np.bincount(train_dataset.labels)
-    class_weights = 1. / torch.tensor(class_counts, dtype=torch.float)
-    sample_weights = [class_weights[label] for label in train_dataset.labels]
+    all_labels_train = []
+    for dataset in train_dataset.datasets:  # Access individual datasets in ConcatDataset
+        all_labels_train.extend(dataset.img_labels['etiqueta'].tolist())  # Assuming 'etiqueta' is the label column
+
+    class_counts_train = np.bincount(all_labels_train)
+    class_weights_train = 1. / torch.tensor(class_counts_train, dtype=torch.float)
+    sample_weights_train = [class_weights_train[label] for label in all_labels_train]
+    sample_weights_train = torch.tensor(sample_weights_train, dtype=torch.float)
+    sample_weights_train = sample_weights_train / sample_weights_train.sum()  # Normalize weights
+
+    all_labels_val = []
+    for dataset in val_dataset.datasets:  # Access individual datasets in ConcatDataset
+        all_labels_val.extend(dataset.img_labels['etiqueta'].tolist())  # Assuming 'etiqueta' is the label column
+    class_counts_val = np.bincount(all_labels_val)
+    class_weights_val = 1. / torch.tensor(class_counts_val, dtype=torch.float)
+    sample_weights_val = [class_weights_val[label] for label in all_labels_val]
+    sample_weights_val = torch.tensor(sample_weights_val, dtype=torch.float)
+    sample_weights_val = sample_weights_val / sample_weights_val.sum()  # Normalize weights
 
     # Creating the WeightedRandomSampler
-    train_sampler = WeightedRandomSampler(weights=sample_weights,
+    train_sampler = WeightedRandomSampler(weights=sample_weights_train,
                                 num_samples=len(train_dataset),
                                 replacement=True)
-    val_sampler = WeightedRandomSampler(weights=sample_weights,
+    
+    val_sampler = WeightedRandomSampler(weights=sample_weights_val,
                                 num_samples=len(val_dataset),
                                 replacement=True)
-    
+        
     train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=train_sampler, shuffle=False)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, sampler=val_sampler, shuffle=False)
 else:
