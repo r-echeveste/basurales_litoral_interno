@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 import torch
-from torch.utils.data import Dataset, DataLoader, random_split, ConcatDataset
+from torch.utils.data import Dataset, DataLoader, random_split, ConcatDataset, WeightedRandomSampler
 from torch.optim import Adam
 from torch.nn import BCEWithLogitsLoss
 from torchvision import transforms
@@ -11,13 +11,17 @@ from torchvision import transforms
 project_directory = "./"
 print(f"Current working directory: {os.getcwd()}")
 
+sys.path.append(os.path.join(project_directory, 'lombardia_model'))
+
 # Importing model definition
 from architecture.resnet50_fpn import Net
 
+# Decide if rebalancing based on the target class will be used to train
+rebalance = True
 
 print("Loading Lombardia model...")
 # Loading state dictionary
-STATE_DICT_PATH = "modelo_italia/weights/checkpoint.pth"
+STATE_DICT_PATH = "lombardia_model/weights/checkpoint.pth"
 
 # Creating an instance of the model
 model = Net(num_classes=1)
@@ -132,7 +136,12 @@ print(f"Combined Test Dataset Size: {len(test_dataset)}")
 # Saving images used for train, val and test
 
 # Output location
-output_dir = "litoral_model/no_rebalance"
+
+if (rebalance):
+    output_dir = "litoral_model/rebalance"
+else:   
+    output_dir = "litoral_model/no_rebalance"
+
 os.makedirs(output_dir, exist_ok=True)
 
 train_image_filenames = []
@@ -163,15 +172,34 @@ print("Training the model...")
 batch_size = 16
 
 # Create data loaders
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+
+if (rebalance):
+    # Calculating sample weights
+    class_counts = np.bincount(train_dataset.labels)
+    class_weights = 1. / torch.tensor(class_counts, dtype=torch.float)
+    sample_weights = [class_weights[label] for label in train_dataset.labels]
+
+    # Creating the WeightedRandomSampler
+    train_sampler = WeightedRandomSampler(weights=sample_weights,
+                                num_samples=len(train_dataset),
+                                replacement=True)
+    val_sampler = WeightedRandomSampler(weights=sample_weights,
+                                num_samples=len(val_dataset),
+                                replacement=True)
+    
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=train_sampler, shuffle=False)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, sampler=val_sampler, shuffle=False)
+else:
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
 # Define optimizer and loss function
 optimizer = Adam(model.parameters(), lr=0.001)
 criterion = BCEWithLogitsLoss()  # For binary classification
 
 # Early stopping parameters
-patience = 10  # Same patience as in Torres et al. (2023)
+n_epochs = 200
+patience = 50  # Same patience as in Torres et al. (2023)
 best_val_loss = float('inf')  # Initialize with a very high value
 epochs_without_improvement = 0
 
@@ -183,7 +211,7 @@ train_loss_history = []
 val_loss_history = []
 
 # Training loop
-for epoch in range(100):
+for epoch in range(n_epochs):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
         # Move data to the appropriate device (e.g., GPU if available)
